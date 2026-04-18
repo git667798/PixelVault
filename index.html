@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PIXEL.VAULT | The 5 Million Dollar Homepage</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { background-color: #020617; color: #f8fafc; margin: 0; overflow: hidden; }
+        .glass { background: rgba(15, 23, 42, 0.75); backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.1); }
+        canvas { cursor: crosshair; image-rendering: pixelated; touch-action: none; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- PASTE YOUR CODE FROM SCREENSHOT HERE ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyAwjBdPEC5wuOnZmGmVHLjiGfT_B-3h8qU",
+            authDomain: "pixel-vault-b9335.firebaseapp.com",
+            projectId: "pixel-vault-b9335",
+            storageBucket: "pixel-vault-b9335.firebasestorage.app",
+            messagingSenderId: "967270547044",
+            appId: "1:967270547044:web:087901b3870546a2d82971",
+            measurementId: "G-4PLB1ZD5X8"
+        };
+
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+
+        const GRID_WIDTH = 2500;
+        const GRID_HEIGHT = 2000;
+        const SNAP_SIZE = 10;
+        const FORBIDDEN_KEYWORDS = ['nsfw', 'porn', 'gamble', 'scam', 'hate', 'nazi', 'violence', 'illegal'];
+
+        const App = () => {
+            const [user, setUser] = useState(null);
+            const [pixels, setPixels] = useState([]);
+            const [zoom, setZoom] = useState(0.4);
+            const [position, setPosition] = useState({ x: 50, y: 50 });
+            const [isDragging, setIsDragging] = useState(false);
+            const [isSelecting, setIsSelecting] = useState(false);
+            const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+            const [selectionOrigin, setSelectionOrigin] = useState({ x: 0, y: 0 });
+            const [selectedArea, setSelectedArea] = useState(null);
+            const [isModalOpen, setIsModalOpen] = useState(false);
+            const [isLegalOpen, setIsLegalOpen] = useState(false);
+            const [legalTab, setLegalTab] = useState('tos');
+            const [hoveredPixel, pHoveredPixel] = useState(null);
+            const [agreedToTerms, setAgreedToTerms] = useState(false);
+            const [adminMode, setAdminMode] = useState(false);
+            const [paymentStep, setPaymentStep] = useState(false);
+            const [isProcessing, setIsProcessing] = useState(false);
+
+            useEffect(() => {
+                const unsubscribe = auth.onAuthStateChanged((u) => {
+                    if (!u) auth.signInAnonymously();
+                    setUser(u);
+                });
+                return () => unsubscribe();
+            }, []);
+
+            useEffect(() => {
+                if (!user) return;
+                const unsubscribe = db.collection('pixels').onSnapshot(snap => {
+                    const data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    setPixels(data);
+                });
+                return () => unsubscribe();
+            }, [user]);
+
+            useEffect(() => {
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+                const ctx = canvas.getContext('2d');
+                ctx.imageSmoothingEnabled = false;
+
+                const draw = () => {
+                    ctx.clearRect(0, 0, GRID_WIDTH, GRID_HEIGHT);
+                    ctx.fillStyle = '#020617';
+                    ctx.fillRect(0, 0, GRID_WIDTH, GRID_HEIGHT);
+                    
+                    ctx.strokeStyle = '#0f172a';
+                    ctx.lineWidth = 0.5;
+                    for(let i = 0; i <= GRID_WIDTH; i += SNAP_SIZE) {
+                        ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, GRID_HEIGHT); ctx.stroke();
+                    }
+                    for(let i = 0; i <= GRID_HEIGHT; i += SNAP_SIZE) {
+                        ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(GRID_WIDTH, i); ctx.stroke();
+                    }
+
+                    const visiblePixels = pixels.filter(p => adminMode || p.status === 'approved');
+
+                    visiblePixels.forEach(p => {
+                        if (p.imageUrl) {
+                            const img = new Image();
+                            img.crossOrigin = "anonymous";
+                            img.src = p.imageUrl;
+                            if (img.complete) {
+                                ctx.drawImage(img, p.x, p.y, p.w, p.h);
+                            } else {
+                                img.onload = () => draw();
+                            }
+                        } else {
+                            ctx.fillStyle = p.color || '#3b82f6';
+                            ctx.fillRect(p.x, p.y, p.w, p.h);
+                        }
+                        ctx.strokeStyle = adminMode && p.status === 'pending' ? '#ef4444' : 'rgba(255,255,255,0.05)';
+                        ctx.strokeRect(p.x, p.y, p.w, p.h);
+                    });
+
+                    if (selectedArea) {
+                        ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
+                        ctx.fillRect(selectedArea.x, selectedArea.y, selectedArea.w, selectedArea.h);
+                        ctx.strokeStyle = '#fff';
+                        ctx.lineWidth = 2 / zoom;
+                        ctx.strokeRect(selectedArea.x, selectedArea.y, selectedArea.w, selectedArea.h);
+                    }
+                };
+                draw();
+            }, [pixels, selectedArea, zoom, adminMode]);
+
+            const handleMouseDown = (e) => {
+                if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
+                    setIsDragging(true);
+                    setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
+                } else if (e.button === 0) {
+                    const rect = canvasRef.current.getBoundingClientRect();
+                    const x = Math.floor(((e.clientX - rect.left) / zoom) / SNAP_SIZE) * SNAP_SIZE;
+                    const y = Math.floor(((e.clientY - rect.top) / zoom) / SNAP_SIZE) * SNAP_SIZE;
+                    setIsSelecting(true);
+                    setSelectionOrigin({x, y});
+                    setSelectedArea({ x, y, w: SNAP_SIZE, h: SNAP_SIZE });
+                }
+            };
+
+            const handleMouseMove = (e) => {
+                if (isDragging) {
+                    setPosition({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
+                } else if (isSelecting) {
+                    const rect = canvasRef.current.getBoundingClientRect();
+                    const curX = Math.floor(((e.clientX - rect.left) / zoom) / SNAP_SIZE) * SNAP_SIZE;
+                    const curY = Math.floor(((e.clientY - rect.top) / zoom) / SNAP_SIZE) * SNAP_SIZE;
+                    const x = Math.min(curX, selectionOrigin.x);
+                    const y = Math.min(curY, selectionOrigin.y);
+                    const w = Math.max(SNAP_SIZE, Math.abs(curX - selectionOrigin.x) + SNAP_SIZE);
+                    const h = Math.max(SNAP_SIZE, Math.abs(curY - selectionOrigin.y) + SNAP_SIZE);
+                    setSelectedArea({ x, y, w, h });
+                }
+                const rect = canvasRef.current.getBoundingClientRect();
+                const hX = Math.floor(((e.clientX - rect.left) / zoom) / SNAP_SIZE) * SNAP_SIZE;
+                const hY = Math.floor(((e.clientY - rect.top) / zoom) / SNAP_SIZE) * SNAP_SIZE;
+                const found = pixels.find(p => hX >= p.x && hX < p.x + p.w && hY >= p.y && hY < p.y + p.h);
+                pHoveredPixel(found);
+            };
+
+            const handlePurchase = async (details) => {
+                setIsProcessing(true);
+                try {
+                    await db.collection('pixels').add({
+                        ...selectedArea,
+                        ...details,
+                        owner: user.uid,
+                        status: 'pending',
+                        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    setIsModalOpen(false);
+                    setPaymentStep(false);
+                    setSelectedArea(null);
+                } catch (err) {
+                    console.error(err);
+                } finally {
+                    setIsProcessing(false);
+                }
+            };
+
+            const soldCount = pixels.filter(p => p.status === 'approved').reduce((acc, p) => acc + (p.w * p.h), 0);
+
+            return (
+                <div className="h-screen w-screen flex flex-col relative select-none">
+                    <header className="fixed top-6 left-0 right-0 z-50 px-6">
+                        <div className="max-w-5xl mx-auto glass p-5 rounded-[2rem] flex justify-between items-center shadow-2xl">
+                            <div>
+                                <h1 className="font-black text-2xl tracking-tighter text-white">PIXEL.VAULT</h1>
+                                <button onClick={() => setAdminMode(!adminMode)} className={`text-[9px] font-black uppercase px-2 py-0.5 rounded mt-1 ${adminMode ? 'bg-red-500 text-white' : 'text-slate-500'}`}>
+                                    {adminMode ? 'Moderation ON' : 'Owner Portal'}
+                                </button>
+                            </div>
+                            <div className="flex items-center gap-8">
+                                <span className="text-2xl font-black text-white">${soldCount.toLocaleString()}</span>
+                                <button onClick={() => setIsModalOpen(true)} disabled={!selectedArea} className={`px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest ${selectedArea ? 'bg-white text-black' : 'bg-slate-800 text-slate-600'}`}>Claim Area</button>
+                            </div>
+                        </div>
+                    </header>
+
+                    <main className="flex-1 overflow-hidden" onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={() => { setIsDragging(false); setIsSelecting(false); }}>
+                        <div style={{ transform: `translate(${position.x}px, ${position.y}px) scale(${zoom})`, transformOrigin: '0 0' }}>
+                            <canvas ref={canvasRef} width={GRID_WIDTH} height={GRID_HEIGHT} className="bg-slate-900" />
+                        </div>
+                    </main>
+
+                    <footer className="fixed bottom-0 left-0 right-0 p-4 flex justify-between glass border-t border-white/5">
+                        <button onClick={() => setIsLegalOpen(true)} className="text-[10px] font-black uppercase text-slate-500 hover:text-white">Legal Protocol</button>
+                        <span className="text-[10px] font-black uppercase text-slate-700">Section 230 & 5-Year Protected</span>
+                    </footer>
+
+                    {isModalOpen && (
+                        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4">
+                            <div className="bg-slate-900 border border-white/10 rounded-[3rem] p-8 max-w-sm w-full">
+                                <h3 className="text-sm font-black uppercase text-slate-500 mb-6">Design Property</h3>
+                                <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); const fd = new FormData(e.target); handlePurchase(Object.fromEntries(fd)); }}>
+                                    <input name="title" required placeholder="Project Name" className="w-full bg-slate-950 p-5 rounded-2xl outline-none" />
+                                    <input name="url" required type="url" placeholder="Destination (https://...)" className="w-full bg-slate-950 p-5 rounded-2xl outline-none" />
+                                    <input name="imageUrl" placeholder="Image Link (Logo URL)" className="w-full bg-slate-950 p-5 rounded-2xl outline-none" />
+                                    <div className="flex items-center gap-3 p-4 bg-slate-900/50 rounded-2xl" onClick={() => setAgreedToTerms(!agreedToTerms)}>
+                                        <input type="checkbox" checked={agreedToTerms} readOnly className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-blue-500" />
+                                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Accept 5-Year Guarantee</span>
+                                    </div>
+                                    <button disabled={!agreedToTerms || isProcessing} className="w-full bg-white text-black py-5 rounded-2xl font-black uppercase text-[10px] tracking-widest">
+                                        {isProcessing ? 'Processing...' : `Authorize $${selectedArea.w * selectedArea.h}`}
+                                    </button>
+                                    <button type="button" onClick={() => setIsModalOpen(false)} className="w-full text-[10px] font-black uppercase text-slate-600">Cancel</button>
+                                </form>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+
+        const canvasRef = React.createRef();
+    </script>
+</body>
+</html>
